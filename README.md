@@ -1,4 +1,4 @@
-# RepoMind Explainer - AI-Powered Codebase Intelligence Dashboard
+# RepoMind Explainer 
 
 RepoMind Explainer is a state-of-the-art developer dashboard designed to analyze, visualize, and explain GitHub repositories. By integrating AI-driven insights, Mermaid system topology diagrams, automated security scanning, staleness metrics, and semantic RAG chat, it lets developers onboard onto complex codebases in minutes.
 
