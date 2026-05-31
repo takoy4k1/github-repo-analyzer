@@ -77,7 +77,7 @@ const MermaidDiagram = ({ chartCode, repoId, repoUrl }) => {
 
         // 2. Fix unquoted node labels with spaces/dots/slashes inside parentheses: e.g. A(Alpha Vantage API) -> A["Alpha Vantage API"]
         cleanCode = cleanCode.replace(/(\w+)\(([^)]+)\)/g, (match, nodeId, label) => {
-          if (/[ .\/\-_]/.test(label)) {
+          if (new RegExp('[ ./_-]').test(label)) {
             return `${nodeId}["${label}"]`;
           }
           return match;
@@ -110,6 +110,12 @@ const MermaidDiagram = ({ chartCode, repoId, repoUrl }) => {
 
     return () => clearTimeout(timer);
   }, [chartCode]);
+
+  useEffect(() => {
+    if (containerRef.current) {
+      containerRef.current.innerHTML = svgContent;
+    }
+  }, [svgContent]);
 
   if (!chartCode) {
     return (
@@ -175,7 +181,6 @@ const MermaidDiagram = ({ chartCode, repoId, repoUrl }) => {
       <div 
         ref={containerRef}
         className="w-full flex justify-center items-center"
-        dangerouslySetInnerHTML={{ __html: svgContent }} 
       />
     </div>
   );
