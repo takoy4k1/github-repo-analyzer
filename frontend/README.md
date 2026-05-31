@@ -1,16 +1,24 @@
-# React + Vite
+# RepoMind Explainer - Frontend Client
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+This is the React + Vite client web application for RepoMind Explainer.
 
-Currently, two official plugins are available:
+## 💻 Tech Stack & Dependencies
+- **Core**: React.js, React Router DOM (Navigation), React Context (Authentication)
+- **Styling**: Tailwind CSS v4, custom utility classes, CSS custom variables for themes
+- **Graphics**: Framer Motion (page animations), Lucide React (vector icons), Recharts (health scorecard graphs)
+- **API Communication**: Axios interceptors (attaching JWT token, handling 401 redirects)
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## 🛠️ Run Locally
+1. Ensure the Node API is running in the backend folder.
+2. Install frontend dependencies:
+   ```bash
+   npm install
+   ```
+3. Launch Vite development server:
+   ```bash
+   npm run dev
+   ```
+4. Access the web app at `http://localhost:5173`.
 
-## React Compiler
+For full setup documentation (including database configuration, environment variables, and visual design guidelines), please check out the master [root README.md](../README.md).
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
