@@ -1,0 +1,10 @@
+{
+  "verbose": true,
+  "ignore": [
+    "temp_repos",
+    "temp_repos/*",
+    "temp_repos/**",
+    "**/temp_repos/**",
+    "*.log"
+  ]
+}

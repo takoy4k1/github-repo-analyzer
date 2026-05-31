@@ -1,0 +1,147 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap');
+
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "JetBrains Mono", ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, "Liberation Mono", monospace;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, "Liberation Mono", monospace;
+  
+  --color-background: var(--bg-color);
+  --color-panel: var(--panel-color);
+  --color-border: var(--border-color);
+  --color-text: var(--text-color);
+  --color-accent: var(--accent-color);
+  
+  --color-accent-green: var(--green-color);
+  --color-accent-red: var(--red-color);
+  --color-accent-orange: var(--orange-color);
+  
+  --color-brand-violet: var(--color-brand-violet);
+  --color-brand-indigo: var(--color-brand-indigo);
+  --color-brand-cyan: var(--color-brand-cyan);
+  --color-brand-emerald: var(--color-brand-emerald);
+}
+
+:root {
+  --bg-color: #fdfbf7;      /* Creamy Off-white Background */
+  --panel-color: #f7f4ec;   /* Soft Ivory Panel */
+  --border-color: #dfd9c8;  /* Light Muted Warm Border */
+  --text-color: #242520;    /* Dark Charcoal Text */
+  --accent-color: #422a0a;
+  
+  --green-color: #1a7f37;
+  --red-color: #cf222e;
+  --orange-color: #bc4c00;
+  
+  --color-brand-violet: #422a0a;
+  --color-brand-indigo: #422a0a;
+  --color-brand-cyan: #422a0a;
+  --color-brand-emerald: #1a7f37;
+}
+
+.dark {
+  --bg-color: #0d1117;
+  --panel-color: #161b22;
+  --border-color: #30363d;
+  --text-color: #c9d1d9;
+  --accent-color: #d4a373;
+  
+  --green-color: #3fb950;
+  --red-color: #f85149;
+  --orange-color: #db6d28;
+  
+  --color-brand-violet: #d4a373;
+  --color-brand-indigo: #d4a373;
+  --color-brand-cyan: #d4a373;
+  --color-brand-emerald: #3fb950;
+}
+
+@layer base {
+  body {
+    @apply bg-background text-text font-mono antialiased overflow-x-hidden;
+    margin: 0;
+  }
+}
+
+/* GitHub Redefining Components */
+.glass-panel {
+  @apply bg-panel border border-border rounded-md p-6 shadow-sm;
+}
+
+.glass-panel-interactive {
+  @apply bg-panel border border-border rounded-md p-6 shadow-sm hover:border-slate-400 dark:hover:border-slate-500 transition-all duration-150;
+}
+
+.glass-input {
+  @apply w-full bg-background border border-border rounded-md px-3 py-2 text-xs text-text outline-none focus:border-accent transition-colors;
+}
+
+/* Primary Button (GitHub Green) */
+.btn-glow-violet {
+  @apply inline-flex items-center justify-center px-4 py-2 text-xs font-semibold rounded-md text-white bg-accent-green hover:brightness-95 transition-all cursor-pointer border border-transparent shadow-sm;
+}
+
+.btn-glow-violet:disabled {
+  @apply opacity-50 cursor-not-allowed;
+}
+
+/* Secondary Button (GitHub Default Gray) */
+.btn-glow-cyan {
+  @apply inline-flex items-center justify-center px-4 py-2 text-xs font-semibold rounded-md bg-panel text-text border border-border hover:bg-slate-50 dark:hover:bg-slate-800 transition-all cursor-pointer shadow-sm;
+}
+
+.btn-glow-cyan:disabled {
+  @apply opacity-50 cursor-not-allowed;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background-color: var(--panel-color);
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--border-color);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-color);
+  opacity: 0.8;
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none !important;
+}
+.scrollbar-none {
+  -ms-overflow-style: none !important;
+  scrollbar-width: none !important;
+}
+
+/* Mermaid graph styling matches dark theme */
+.mermaid {
+  background-color: transparent !important;
+  color: var(--text-color) !important;
+}
+
+.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Background neon glow blobs */
+.bg-radial-glow {
+  position: absolute;
+  background: radial-gradient(circle, currentColor 0%, transparent 70%);
+  filter: blur(80px);
+  pointer-events: none;
+  z-index: 0;
+  border-radius: 9999px;
+}
+
