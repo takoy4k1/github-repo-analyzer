@@ -75,8 +75,13 @@ const Navbar = () => {
               
               <div className="h-4 w-px bg-border" />
 
-              <span className="text-xs font-semibold text-slate-500 hidden sm:inline">
+              <span className="text-xs font-semibold text-slate-500 hidden sm:inline-flex items-center gap-1.5">
                 user: <span className="text-text font-bold">{user.username}</span>
+                {user.githubConnected && (
+                  <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" title="GitHub account linked">
+                    GH
+                  </span>
+                )}
               </span>
 
               <button

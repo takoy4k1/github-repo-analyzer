@@ -30,6 +30,92 @@ const githubFetch = async (endpoint, token, options = {}) => {
 };
 
 /**
+ * Verify whether a repository exists and is accessible using the provided token or unauthenticated.
+ * Returns actionable diagnostic info if inaccessible.
+ */
+export const checkRepositoryAccess = async (fullName, token = null) => {
+  try {
+    const headers = {
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'RepoMind-AI-Server'
+    };
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${GITHUB_API_URL}/repos/${fullName}`, { headers });
+
+    if (response.ok) {
+      const data = await response.json();
+      return {
+        accessible: true,
+        isPrivate: data.private,
+        defaultBranch: data.default_branch,
+        permissions: data.permissions
+      };
+    }
+
+    if (response.status === 401) {
+      return {
+        accessible: false,
+        status: 401,
+        reason: 'invalid_token',
+        message: 'GitHub authorization token is invalid or has been revoked. Please reconnect your GitHub account.'
+      };
+    }
+
+    if (response.status === 403) {
+      if (response.headers.get('x-ratelimit-remaining') === '0') {
+        return {
+          accessible: false,
+          status: 403,
+          reason: 'rate_limited',
+          message: 'GitHub API rate limit exceeded. Please wait or connect a GitHub account for higher rate limits.'
+        };
+      }
+      return {
+        accessible: false,
+        status: 403,
+        reason: 'forbidden',
+        message: 'Access forbidden: your GitHub account does not have sufficient permissions to read this repository.'
+      };
+    }
+
+    if (response.status === 404) {
+      if (!token) {
+        return {
+          accessible: false,
+          status: 404,
+          reason: 'not_found_or_private',
+          message: 'Repository not found or is private. Connect your GitHub account with the "repo" scope or supply a Personal Access Token to analyze private repositories.'
+        };
+      }
+      return {
+        accessible: false,
+        status: 404,
+        reason: 'not_found',
+        message: `Repository "${fullName}" was not found or your connected GitHub account does not have read permissions.`
+      };
+    }
+
+    return {
+      accessible: false,
+      status: response.status,
+      reason: 'unknown',
+      message: `GitHub returned HTTP ${response.status} while checking repository access.`
+    };
+  } catch (err) {
+    // If GitHub API is unreachable (e.g., offline or network issue), log and return warning
+    console.warn(`checkRepositoryAccess network error for ${fullName}:`, err.message);
+    return {
+      accessible: true,
+      networkError: true,
+      message: 'GitHub API unreachable; proceeding with clone attempt.'
+    };
+  }
+};
+
+/**
  * Get repository basic details, issues count, stars, forks, etc.
  */
 export const getRepoMetadata = async (fullName, token) => {

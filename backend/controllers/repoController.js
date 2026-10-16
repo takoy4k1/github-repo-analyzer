@@ -10,7 +10,7 @@ import { cloneRepo, cleanupRepo, analyzeGitHistory } from '../services/gitServic
 import { parseRepository, chunkFile } from '../services/parserService.js';
 import { getEmbedding, generateSummary, generateFileExplanation, generatePRReview } from '../services/aiService.js';
 import { runAnalytics } from '../services/analyzerService.js';
-import { getRepoMetadata, getRepoPullRequests, getPullRequestDiff, postPRComment } from '../services/githubService.js';
+import { getRepoMetadata, getRepoPullRequests, getPullRequestDiff, postPRComment, checkRepositoryAccess } from '../services/githubService.js';
 import { generateSVG } from '../services/badgeService.js';
 import { getCache, setCache } from '../services/cacheService.js';
 import { runSecurityScan } from '../services/securityService.js';
@@ -97,25 +97,46 @@ export const deleteRepository = async (req, res) => {
 };
 
 export const analyzeRepository = async (req, res) => {
-  const { url } = req.body;
+  const { url, token: requestPat } = req.body;
 
   if (!url) {
     return res.status(400).json({ message: 'Repository URL is required' });
   }
 
   const { owner, name, url: parsedUrl, branch } = parseGithubUrl(url);
+  const fullName = `${owner}/${name}`;
   const tempPath = path.resolve(`../temp_repos/${req.user.id}/${name}-${Date.now()}`);
 
   try {
-    // Create new Repository record
+    // 1. Fetch user to obtain stored OAuth access token (if connected)
+    const user = await User.findById(req.user.id);
+    const oauthToken = user ? user.decryptToken() : null;
+    const activeToken = requestPat?.trim() || oauthToken;
+
+    // 2. Validate repository access with GitHub API before creating record
+    const accessCheck = await checkRepositoryAccess(fullName, activeToken);
+
+    if (!accessCheck.accessible && !accessCheck.networkError) {
+      return res.status(accessCheck.status || 400).json({
+        message: accessCheck.message,
+        reason: accessCheck.reason,
+        requiresAuth: accessCheck.reason === 'not_found_or_private'
+      });
+    }
+
+    const branchToUse = (branch === 'main' && accessCheck.defaultBranch)
+      ? accessCheck.defaultBranch
+      : branch;
+
+    // 3. Create new Repository record
     const repository = await Repository.create({
       user: req.user.id,
       name,
       owner,
-      fullName: `${owner}/${name}`,
+      fullName,
       ownerId: owner,
       url: parsedUrl,
-      branch,
+      branch: branchToUse,
       status: 'pending'
     });
 
@@ -125,10 +146,10 @@ export const analyzeRepository = async (req, res) => {
     // Run the intensive operations in the background
     (async () => {
       try {
-        // Step 1: Clone Repo
+        // Step 1: Clone Repo with authentication token (if private)
         repository.status = 'cloning';
         await repository.save();
-        await cloneRepo(parsedUrl, tempPath, branch);
+        await cloneRepo(parsedUrl, tempPath, branchToUse, activeToken);
 
         // Step 2: Parse Files
         repository.status = 'parsing';
@@ -137,15 +158,12 @@ export const analyzeRepository = async (req, res) => {
         
         repository.fileTree = parsed.fileTree;
         
-        // Fetch user token for GitHub API queries
-        const user = await User.findById(req.user.id);
-        const githubToken = user ? user.decryptToken() : null;
         const stalenessThreshold = user?.settings?.stalenessThreshold || 90;
 
         // Step 2.5: Git Log History Analysis & GitHub API fetches
         const gitStats = await analyzeGitHistory(tempPath);
-        const githubMetadata = await getRepoMetadata(repository.fullName, githubToken);
-        const githubPrs = await getRepoPullRequests(repository.fullName, githubToken);
+        const githubMetadata = await getRepoMetadata(repository.fullName, activeToken);
+        const githubPrs = await getRepoPullRequests(repository.fullName, activeToken);
 
         // Run analytics to compute Health Score, Contributor DNA, Dev Velocity, and Dead Code
         const analytics = runAnalytics({
@@ -165,30 +183,43 @@ export const analyzeRepository = async (req, res) => {
         repository.status = 'indexing';
         await repository.save();
 
-        const chunksToInsert = [];
-        
+        const rawChunks = [];
         for (const file of parsed.files) {
           const fileChunks = chunkFile(file.path, file.content, file.language);
-          
           for (const chunk of fileChunks) {
-            // Ensure chunk content is not empty to satisfy Mongoose validator & avoid OpenAI API errors
             const chunkContent = chunk.content && chunk.content.trim() !== '' 
               ? chunk.content 
               : `// Empty file: ${chunk.filePath}`;
-
-            // Get embedding vector from OpenAI / mock
-            const embedding = await getEmbedding(chunkContent);
-            
-            chunksToInsert.push({
-              repository: repository._id,
+            rawChunks.push({
               filePath: chunk.filePath,
               content: chunkContent,
               startLine: chunk.startLine,
               endLine: chunk.endLine,
-              language: chunk.language,
-              embedding
+              language: chunk.language
             });
           }
+        }
+
+        // Process embeddings in concurrent batches to drastically speed up indexing
+        const BATCH_SIZE = 15;
+        const chunksToInsert = [];
+        for (let i = 0; i < rawChunks.length; i += BATCH_SIZE) {
+          const batch = rawChunks.slice(i, i + BATCH_SIZE);
+          const results = await Promise.all(
+            batch.map(async (chunk) => {
+              const embedding = await getEmbedding(chunk.content);
+              return {
+                repository: repository._id,
+                filePath: chunk.filePath,
+                content: chunk.content,
+                startLine: chunk.startLine,
+                endLine: chunk.endLine,
+                language: chunk.language,
+                embedding
+              };
+            })
+          );
+          chunksToInsert.push(...results);
         }
 
         if (chunksToInsert.length > 0) {
@@ -548,4 +579,3 @@ export const compareRepositories = async (req, res) => {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
-

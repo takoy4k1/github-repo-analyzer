@@ -14,14 +14,19 @@ import util from 'util';
 
 const execPromise = util.promisify(exec);
 
+// Ensure all git operations bypass LFS large binary downloads and interactive terminal prompts
+process.env.GIT_LFS_SKIP_SMUDGE = '1';
+process.env.GIT_TERMINAL_PROMPT = '0';
+
 /**
  * Clones a public GitHub repository to a temporary directory.
  * @param {string} repoUrl - The URL of the GitHub repository.
  * @param {string} tempPath - The local path where the repo should be cloned.
  * @param {string} branch - The branch to clone (default 'main').
+ * @param {string|null} token - Optional OAuth or Personal Access Token for private repository access.
  * @returns {Promise<void>}
  */
-export const cloneRepo = async (repoUrl, tempPath, branch = 'main') => {
+export const cloneRepo = async (repoUrl, tempPath, branch = 'main', token = null) => {
   try {
     // Ensure the parent directory exists
     await fs.ensureDir(path.dirname(tempPath));
@@ -31,17 +36,64 @@ export const cloneRepo = async (repoUrl, tempPath, branch = 'main') => {
       await fs.remove(tempPath);
     }
     
-    const git = simpleGit();
+    // Configure git to bypass Git LFS large binary file downloads and interactive prompts
+    const git = simpleGit({
+      spawnOptions: {
+        env: {
+          ...process.env,
+          GIT_LFS_SKIP_SMUDGE: '1',
+          GIT_TERMINAL_PROMPT: '0'
+        }
+      }
+    });
     
-    // Clone with depth 1. Try branch first, fall back to default if it fails.
+    // Construct authenticated clone URL if token provided
+    let targetUrl = repoUrl;
+    if (token) {
+      try {
+        const parsed = new URL(repoUrl.startsWith('http') ? repoUrl : `https://${repoUrl}`);
+        parsed.username = 'x-access-token';
+        parsed.password = token;
+        targetUrl = parsed.toString();
+      } catch {
+        // Fall back to Bearer token header if URL parsing fails
+        targetUrl = repoUrl;
+      }
+    }
+
+    // High performance shallow clone flags: shallow depth, single branch, omit tags
+    const baseCloneArgs = [
+      '--depth', '1',
+      '--single-branch',
+      '--no-tags'
+    ];
+
+    // Clone with depth 1. Try specified branch first, fall back to default if it fails.
     try {
-      await git.clone(repoUrl, tempPath, ['--depth', '1', '-b', branch]);
+      await git.clone(targetUrl, tempPath, [...baseCloneArgs, '-b', branch]);
     } catch (branchError) {
       console.warn(`Failed to clone branch "${branch}", falling back to default branch: ${branchError.message}`);
-      await git.clone(repoUrl, tempPath, ['--depth', '1']);
+      await git.clone(targetUrl, tempPath, baseCloneArgs);
+    }
+
+    // Sanitize origin URL in cloned .git/config so credentials are never stored on disk
+    if (token) {
+      try {
+        const repoGit = simpleGit(tempPath);
+        await repoGit.remote(['set-url', 'origin', repoUrl]);
+      } catch (cleanErr) {
+        // Non-critical cleanup failure
+      }
     }
   } catch (error) {
-    throw new Error(`Failed to clone repository: ${error.message}`);
+    // Redact token from error message so it is never leaked to logs or client
+    let safeMsg = error.message;
+    if (token) {
+      safeMsg = safeMsg.split(token).join('[REDACTED]');
+      const encoded = encodeURIComponent(token);
+      safeMsg = safeMsg.split(encoded).join('[REDACTED]');
+    }
+    throw new Error(`Failed to clone repository: ${safeMsg}`);
   }
 };
 

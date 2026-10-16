@@ -8,13 +8,13 @@ dotenv.config();
 const GROK_BASE_URL = "https://api.groq.com/openai/v1";
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
 
-const hasGrokKey   = () => !!process.env.XAI_API_KEY?.trim();
+const hasGrokKey = () => !!process.env.GROQ_API_KEY?.trim();
 const hasOpenAIKey = () => !!process.env.OPENAI_API_KEY?.trim();
 const hasAnthropicKey = () => !!process.env.ANTHROPIC_API_KEY?.trim();
 
 const grokHeaders = () => ({
   "Content-Type": "application/json",
-  Authorization: `Bearer ${process.env.XAI_API_KEY}`,
+  Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
 });
 
 const openaiHeaders = () => ({
@@ -165,7 +165,7 @@ const grokGenerate = async (prompt, json = false) => {
         method: "POST",
         headers: grokHeaders(),
         body: JSON.stringify({
-          model: "llama-3.3-70b-versatile",
+          model: "openai/gpt-oss-120b",
           messages: [{ role: "user", content: prompt }],
           ...(json && { response_format: { type: "json_object" } }),
         }),
@@ -265,7 +265,7 @@ Mermaid diagram guidelines:
 ========================= */
 export const generateFileExplanation = async (filePath, fileContent) => {
   if (!hasGrokKey()) {
-    return `### AI Explanation (Offline Mode)\n- File: \`${filePath}\`\nAdd an XAI_API_KEY to unlock AI analysis.`;
+    return `### AI Explanation (Offline Mode)\n- File: \`${filePath}\`\nAdd a GROQ_API_KEY to unlock AI analysis.`;
   }
 
   const prompt = `
@@ -294,7 +294,7 @@ Include:
 ========================= */
 export const generateChatAnswer = async (question, retrievedChunks) => {
   if (!hasGrokKey()) {
-    return "Please configure XAI_API_KEY in your .env file.";
+    return "Please configure GROQ_API_KEY in your .env file.";
   }
 
   const context = retrievedChunks

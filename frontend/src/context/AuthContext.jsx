@@ -61,13 +61,68 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  const refreshUser = async () => {
+    try {
+      const response = await api.get('/auth/me');
+      setUser(response.data);
+      return response.data;
+    } catch (err) {
+      console.error('Failed to refresh user:', err.message);
+      return null;
+    }
+  };
+
+  const loginWithGitHub = () => {
+    const backendUrl = import.meta.env.VITE_API_URL || 'http://localhost:5001/api';
+    window.location.href = `${backendUrl}/auth/github`;
+  };
+
+  const connectGitHub = () => {
+    const backendUrl = import.meta.env.VITE_API_URL || 'http://localhost:5001/api';
+    const token = localStorage.getItem('repomind_token');
+    window.location.href = `${backendUrl}/auth/github?token=${encodeURIComponent(token || '')}`;
+  };
+
+  const disconnectGitHub = async () => {
+    try {
+      await api.delete('/auth/github/disconnect');
+      await refreshUser();
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        message: error.response?.data?.message || 'Failed to disconnect GitHub account.'
+      };
+    }
+  };
+
+  const setSession = (token, userData) => {
+    if (token) {
+      localStorage.setItem('repomind_token', token);
+    }
+    if (userData) {
+      setUser(userData);
+    }
+  };
+
   const logout = () => {
     localStorage.removeItem('repomind_token');
     setUser(null);
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout }}>
+    <AuthContext.Provider value={{
+      user,
+      loading,
+      login,
+      register,
+      logout,
+      refreshUser,
+      connectGitHub,
+      loginWithGitHub,
+      disconnectGitHub,
+      setSession
+    }}>
       {children}
     </AuthContext.Provider>
   );

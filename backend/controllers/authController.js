@@ -4,6 +4,32 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 
+// ---------------------------------------------------------------------------
+// In-memory CSRF state store.  Each state maps to metadata and has a 10-min
+// expiry.  This is intentionally stateless relative to sessions; the JWT
+// carries the user identity for the "connect GitHub to existing account" flow.
+// ---------------------------------------------------------------------------
+const oauthStateMap = new Map();
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+const createOAuthState = (userId = null) => {
+  const state = crypto.randomBytes(24).toString('hex');
+  oauthStateMap.set(state, { userId, createdAt: Date.now() });
+  // Prune expired states periodically
+  for (const [s, meta] of oauthStateMap) {
+    if (Date.now() - meta.createdAt > OAUTH_STATE_TTL_MS) oauthStateMap.delete(s);
+  }
+  return state;
+};
+
+const consumeOAuthState = (state) => {
+  const meta = oauthStateMap.get(state);
+  if (!meta) return null;
+  oauthStateMap.delete(state);
+  if (Date.now() - meta.createdAt > OAUTH_STATE_TTL_MS) return null;
+  return meta;
+};
+
 
 const generateToken = (userId) => {
   return jwt.sign(
@@ -30,32 +56,95 @@ const generateRefreshToken = async (userId) => {
 
 /**
  * Initiates GitHub OAuth Flow.
- * Redirects the client to GitHub's authorization page.
+ *
+ * Two modes:
+ *   1. Guest / login:  No Authorization header → create a new RepoMind session via GitHub.
+ *   2. Connect:        Authorization header present → connect GitHub to an existing local account.
+ *
+ * A cryptographically random state is generated, stored server-side, and sent
+ * to GitHub.  It is validated in the callback to prevent CSRF.
  */
 export const githubAuth = (req, res) => {
   const clientId = process.env.GITHUB_CLIENT_ID;
   const callbackUrl = process.env.GITHUB_CALLBACK_URL || 'http://localhost:5001/api/auth/github/callback';
-  
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+
   if (!clientId) {
-    return res.status(500).json({ message: 'GitHub OAuth Client ID is not configured on the server.' });
+    // Redirect to callback page to display clean notification to user
+    return res.redirect(`${frontendUrl}/auth/callback?github_error=not_configured`);
   }
 
-  const githubUrl = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(callbackUrl)}&scope=repo,user`;
-  res.redirect(githubUrl);
+  // Attempt to extract existing user ID from JWT (connect-to-account flow)
+  let userId = null;
+  const rawToken = req.query.token || (
+    req.header('Authorization')?.startsWith('Bearer ')
+      ? req.header('Authorization').split(' ')[1]
+      : null
+  );
+
+  if (rawToken) {
+    try {
+      const decoded = jwt.verify(
+        rawToken,
+        process.env.JWT_SECRET || 'fallback_secret_key'
+      );
+      userId = decoded.id;
+    } catch {
+      // Ignore invalid token – treat as anonymous OAuth login
+    }
+  }
+
+  const state = createOAuthState(userId);
+
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: callbackUrl,
+    scope: 'repo,user:email',
+    state
+  });
+
+  res.redirect(`https://github.com/login/oauth/authorize?${params.toString()}`);
 };
 
 /**
  * Handles GitHub OAuth Callback.
- * Exchanges the code for access token, fetches profile, and authenticates the user.
+ *
+ * Validates the state parameter (CSRF), exchanges code for access token,
+ * fetches GitHub profile, then either:
+ *   - Creates / updates a RepoMind user (login/register flow), or
+ *   - Attaches the GitHub token to an existing local user (connect flow).
+ *
+ * Session tokens are passed via a short-lived one-time-use code rather than
+ * putting JWTs directly in the URL, mitigating leakage through referrer headers
+ * or server logs.
  */
 export const githubCallback = async (req, res) => {
-  const { code } = req.query;
+  const { code, state, error: githubError } = req.query;
   const clientId = process.env.GITHUB_CLIENT_ID;
   const clientSecret = process.env.GITHUB_CLIENT_SECRET;
   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
 
+  // --- User denied authorization ---
+  if (githubError === 'access_denied') {
+    return res.redirect(`${frontendUrl}/auth?github_error=access_denied`);
+  }
+
   if (!code) {
-    return res.redirect(`${frontendUrl}/login?error=no_code`);
+    return res.redirect(`${frontendUrl}/auth?github_error=no_code`);
+  }
+
+  // --- CSRF state validation ---
+  if (!state) {
+    return res.redirect(`${frontendUrl}/auth?github_error=missing_state`);
+  }
+
+  const stateMeta = consumeOAuthState(state);
+  if (!stateMeta) {
+    return res.redirect(`${frontendUrl}/auth?github_error=invalid_state`);
+  }
+
+  if (!clientId || !clientSecret) {
+    return res.redirect(`${frontendUrl}/auth?github_error=not_configured`);
   }
 
   try {
@@ -76,13 +165,14 @@ export const githubCallback = async (req, res) => {
     const tokenData = await tokenResponse.json();
     const accessToken = tokenData.access_token;
 
-    if (!accessToken) {
-      console.error('Failed to retrieve GitHub access token:', tokenData);
-      return res.redirect(`${frontendUrl}/login?error=token_exchange_failed`);
+    if (tokenData.error || !accessToken) {
+      const reason = tokenData.error_description || tokenData.error || 'unknown';
+      console.error('GitHub token exchange failed:', tokenData);
+      return res.redirect(`${frontendUrl}/auth?github_error=token_exchange_failed&reason=${encodeURIComponent(reason)}`);
     }
 
-    // 2. Fetch User Profile from GitHub API
-    const userProfileResponse = await fetch('https://api.github.com/user', {
+    // 2. Fetch GitHub profile
+    const profileRes = await fetch('https://api.github.com/user', {
       headers: {
         Authorization: `Bearer ${accessToken}`,
         Accept: 'application/vnd.github+json',
@@ -90,45 +180,166 @@ export const githubCallback = async (req, res) => {
       }
     });
 
-    const profile = await userProfileResponse.json();
-
-    if (!profile.id) {
-      console.error('Failed to retrieve GitHub profile:', profile);
-      return res.redirect(`${frontendUrl}/login?error=profile_fetch_failed`);
+    if (!profileRes.ok) {
+      console.error('GitHub profile fetch failed:', profileRes.status);
+      return res.redirect(`${frontendUrl}/auth?github_error=profile_fetch_failed`);
     }
 
-    // 3. Find or Create User in MongoDB
-    let user = await User.findOne({ githubId: profile.id.toString() });
+    const profile = await profileRes.json();
+
+    if (!profile.id) {
+      return res.redirect(`${frontendUrl}/auth?github_error=profile_fetch_failed`);
+    }
+
+    let user;
+
+    // --- Connect flow: attach GitHub to an existing local user ---
+    if (stateMeta.userId) {
+      user = await User.findById(stateMeta.userId);
+      if (!user) {
+        return res.redirect(`${frontendUrl}/dashboard?github_error=user_not_found`);
+      }
+      // Check for collision: another account already linked to this GitHub ID
+      const existingGithub = await User.findOne({ githubId: profile.id.toString(), _id: { $ne: user._id } });
+      if (existingGithub) {
+        return res.redirect(`${frontendUrl}/dashboard?github_error=github_account_already_linked`);
+      }
+      user.githubId = profile.id.toString();
+      // Update avatar only if not already set to a custom one
+      if (!user.avatarUrl || user.avatarUrl.includes('dicebear')) {
+        user.avatarUrl = profile.avatar_url;
+      }
+      user.encryptToken(accessToken);
+      await user.save();
+
+      // Use a one-time exchange code so the JWT isn't in the URL
+      const exchangeCode = crypto.randomBytes(16).toString('hex');
+      const codeHash = crypto.createHash('sha256').update(exchangeCode).digest('hex');
+      // Temporarily store the code→userId mapping (5-min TTL reuses the state map pattern)
+      oauthStateMap.set(`xchg:${codeHash}`, { userId: user._id.toString(), type: 'connect', createdAt: Date.now() });
+
+      return res.redirect(`${frontendUrl}/auth/callback?xchg=${exchangeCode}&connected=true`);
+    }
+
+    // --- Login / register flow: find or create user by GitHub ID ---
+    user = await User.findOne({ githubId: profile.id.toString() });
 
     if (!user) {
+      // Check if there's a local account with the same username
+      const usernameConflict = await User.findOne({ username: profile.login });
+      const username = usernameConflict ? `${profile.login}_gh` : profile.login;
+
       user = new User({
         githubId: profile.id.toString(),
-        username: profile.login,
+        username,
         avatarUrl: profile.avatar_url
       });
     } else {
-      // Keep username and avatar up-to-date
-      user.username = profile.login;
       user.avatarUrl = profile.avatar_url;
     }
 
-    // Encrypt and store access token
     user.encryptToken(accessToken);
     await user.save();
 
-    // 4. Generate Session Tokens
+    // Generate RepoMind session tokens
     const token = generateToken(user._id);
     const refreshToken = await generateRefreshToken(user._id);
-
-    // Update user's hashed refresh token in their document for additional session security
     user.hashRefreshToken(refreshToken);
     await user.save();
 
-    // 5. Redirect browser back to Frontend callback handler
-    res.redirect(`${frontendUrl}/auth/callback?token=${token}&refreshToken=${refreshToken}`);
+    // Store tokens server-side behind a one-time exchange code
+    const exchangeCode = crypto.randomBytes(16).toString('hex');
+    const codeHash = crypto.createHash('sha256').update(exchangeCode).digest('hex');
+    oauthStateMap.set(`xchg:${codeHash}`, {
+      userId: user._id.toString(),
+      token,
+      refreshToken,
+      type: 'login',
+      createdAt: Date.now()
+    });
+
+    res.redirect(`${frontendUrl}/auth/callback?xchg=${exchangeCode}`);
   } catch (error) {
-    console.error('OAuth Callback Error:', error);
-    res.redirect(`${frontendUrl}/login?error=server_error`);
+    console.error('OAuth Callback Error:', error.message);
+    res.redirect(`${frontendUrl}/auth?github_error=server_error`);
+  }
+};
+
+/**
+ * Exchanges a one-time OAuth callback code for session tokens.
+ * The frontend calls this immediately on landing at /auth/callback.
+ * Keeps JWTs out of browser history and referrer headers.
+ */
+export const exchangeOAuthCode = (req, res) => {
+  const { xchg } = req.body;
+
+  if (!xchg) {
+    return res.status(400).json({ message: 'Exchange code is required' });
+  }
+
+  const codeHash = crypto.createHash('sha256').update(xchg).digest('hex');
+  const cacheKey = `xchg:${codeHash}`;
+  const meta = oauthStateMap.get(cacheKey);
+
+  if (!meta) {
+    return res.status(400).json({ message: 'Exchange code is invalid or expired' });
+  }
+
+  if (Date.now() - meta.createdAt > 5 * 60 * 1000) {
+    oauthStateMap.delete(cacheKey);
+    return res.status(400).json({ message: 'Exchange code has expired' });
+  }
+
+  // If already exchanged in the last 30 seconds (e.g. React StrictMode duplicate request in dev)
+  if (meta.cachedResponse) {
+    return res.json(meta.cachedResponse);
+  }
+
+  let responseData;
+  if (meta.type === 'connect') {
+    responseData = { connected: true, userId: meta.userId };
+  } else {
+    responseData = { token: meta.token, refreshToken: meta.refreshToken };
+  }
+
+  // Cache response for 30 seconds to support duplicate dev mounts, then clean up
+  meta.cachedResponse = responseData;
+  setTimeout(() => {
+    oauthStateMap.delete(cacheKey);
+  }, 30000);
+
+  return res.json(responseData);
+};
+
+/**
+ * Disconnects the GitHub account from the currently authenticated user.
+ * Deletes the encrypted GitHub access token and clears githubId.
+ */
+export const disconnectGitHub = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (!user.githubId) {
+      return res.status(400).json({ message: 'GitHub account is not connected' });
+    }
+
+    // If the user has no local password (GitHub-only login), block disconnection
+    if (!user.password) {
+      return res.status(400).json({
+        message: 'Cannot disconnect GitHub: this account was created with GitHub login and has no local password. Delete the account instead.'
+      });
+    }
+
+    user.githubId = undefined;
+    user.accessToken = undefined;
+    await user.save();
+
+    res.json({ message: 'GitHub account disconnected successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
 
@@ -328,4 +539,3 @@ export const login = async (req, res) => {
     res.status(500).json({ message: 'Server error during login', error: error.message });
   }
 };
-

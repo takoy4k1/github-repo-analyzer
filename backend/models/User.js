@@ -92,5 +92,19 @@ userSchema.methods.compareRefreshToken = function(token) {
   return this.refreshToken === hash;
 };
 
+// Virtual: is a GitHub account connected?
+userSchema.virtual('githubConnected').get(function () {
+  return Boolean(this.githubId);
+});
+
+// Virtual: expose the GitHub login handle safely (derived from username for display)
+userSchema.virtual('hasLocalPassword').get(function () {
+  return Boolean(this.password);
+});
+
+// Ensure virtuals are included when converting to JSON
+userSchema.set('toJSON', { virtuals: true });
+userSchema.set('toObject', { virtuals: true });
+
 const User = mongoose.model('User', userSchema);
 export default User;
